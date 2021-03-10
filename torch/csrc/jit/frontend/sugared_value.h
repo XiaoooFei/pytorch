@@ -458,15 +458,29 @@ struct MethodValue : public SugaredValue {
     std::vector<const FunctionSchema*> schemas;
     for (const std::string& method_name : method_names_) {
       if (auto class_type = self_->type()->cast<ClassType>()) {
-        Function& method = class_type->getMethod(method_name);
-        try {
-          method.ensure_defined();
-        } catch (const RecursiveMethodCallError&) {
-          throw ErrorReport(loc)
-              << " method '" << method.name() << "' is called recursively. "
-              << "Recursive calls are not supported";
+        Function* method = class_type->findMethod(method_name);
+        if (auto overloaded_method =
+                dynamic_cast<OverloadedFunction*>(method)) {
+          auto overloaded_schemas =
+              overloaded_method->loadPossibleSchemas(class_type, loc);
+          auto matched = matchSchemas(
+              overloaded_schemas, loc, *f.graph(), argsWithSelf, kwargs);
+          auto mangled_name =
+              method_name + "__" + std::to_string(matched.first);
+          Value* output =
+              f.graph()->insertMethodCall(mangled_name, matched.second);
+          output->node()->setSourceRange(loc);
+          return std::make_shared<SimpleValue>(output);
+        } else {
+          try {
+            method->ensure_defined();
+          } catch (const RecursiveMethodCallError&) {
+            throw ErrorReport(loc)
+                << " method '" << method->name() << "' is called recursively. "
+                << "Recursive calls are not supported";
+          }
+          schemas.push_back(&(method->getSchema()));
         }
-        schemas.push_back(&method.getSchema());
       } else if (auto interface_type = self_->type()->cast<InterfaceType>()) {
         schemas.push_back(interface_type->getMethod(method_name));
       } else {
